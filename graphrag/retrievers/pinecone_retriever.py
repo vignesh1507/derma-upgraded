@@ -12,6 +12,10 @@ class PineconeRetriever:
             raise ValueError("PINECONE_API_KEY is not set.")
         self.pc = Pinecone(api_key=Config.PINECONE_API_KEY)
         self.index = self.pc.Index(Config.PINECONE_INDEX_NAME)
+        # Empty string means "default namespace", matching Pinecone's own
+        # semantics and preserving the previous behaviour for single-namespace
+        # indexes.
+        self.namespace = getattr(Config, "PINECONE_NAMESPACE", "") or ""
 
     def retrieve(self, query_text: str, vector_top_k: int = 15, reranker_top_k: int = 5):
         """
@@ -36,15 +40,28 @@ class PineconeRetriever:
         query_vector = response[0]["values"]
 
         # ── 2. Retrieve candidates ──────────────────────────────────────────
-        search_result = self.index.query(
-            vector=query_vector,
-            top_k=vector_top_k,
-            include_metadata=True,
-        )
+        query_kwargs = {
+            "vector": query_vector,
+            "top_k": vector_top_k,
+            "include_metadata": True,
+        }
+        if self.namespace:
+            query_kwargs["namespace"] = self.namespace
+
+        search_result = self.index.query(**query_kwargs)
         matches = search_result.get("matches", [])
 
         if not matches:
-            logger.info("❌ No matches found in vector store.")
+            # Distinguish "corpus has nothing relevant" from "we queried the
+            # wrong partition". A namespaced index returns zero for every query
+            # when the namespace is wrong or unset, which otherwise looks
+            # identical to a genuine miss and silently degrades the service to
+            # ungrounded answers.
+            logger.info(
+                "❌ No matches found in vector store "
+                f"(index={Config.PINECONE_INDEX_NAME}, "
+                f"namespace={self.namespace or '<default>'})."
+            )
             return []
 
         logger.info(f"🔄 {len(matches)} candidates retrieved — reranking...")

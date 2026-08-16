@@ -44,6 +44,11 @@ htmlcov/
 .env
 .env.local
 .env.*.local
+# Any .env variant — backups, swaps, per-stage copies. A .env.bak file
+# holding live keys was one `git add -A` away from being published.
+.env.*
+!.env.example
+
 
 # --------------------------------------------------------------------------
 # Runtime artifacts

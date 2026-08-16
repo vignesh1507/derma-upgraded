@@ -18,7 +18,53 @@ from .models import Message, RiskLevel, Role, SessionMemory, StructuredState
 # Heuristic Pattern Registry
 # ============================================================================
 
+# NOTE ON SCOPE (dermatology deployment)
+# The LLM analyzer (graphrag/query_understanding/analyzer.py) does the primary
+# entity extraction and merges via merge_analysis_entities, so this regex layer
+# is defence-in-depth: it keeps state populated on no-LLM / analyzer-failure
+# paths. The skin terms below were added for that reason; the general-medicine
+# terms are retained because patients volunteer them as comorbidity context
+# ("I'm diabetic and I have a foot ulcer").
+
 SYMPTOM_PATTERNS: dict[str, list[str]] = {
+    # ── Dermatological ──────────────────────────────────────────────────────
+    "itching":            [r"\bitch(y|ing|iness)?\b", r"\bkhujli\b", r"\bpruritus\b",
+                           r"\bscratch(ing)?\b"],
+    "rash":               [r"\brash(es)?\b", r"\bred patch(es)?\b", r"\beruption\b"],
+    "scaling":            [r"\bscal(y|ing|es)\b", r"\bflak(y|ing|es)\b", r"\bpeeling\b"],
+    "dryness":            [r"\bdry skin\b", r"\bxerosis\b", r"\brough skin\b"],
+    "papules":            [r"\bpapule(s)?\b", r"\bbump(s)?\b", r"\bpimple(s)?\b",
+                           r"\bzit(s)?\b", r"\bacne\b"],
+    "pustules":           [r"\bpustule(s)?\b", r"\bboil(s)?\b", r"\bpus\b",
+                           r"\bwhitehead(s)?\b"],
+    "blisters":           [r"\bblister(s|ing)?\b", r"\bvesicle(s)?\b", r"\bbulla(e)?\b"],
+    "wheals":             [r"\bwheal(s)?\b", r"\bhives\b", r"\burticaria\b",
+                           r"\braised welts?\b"],
+    "plaques":            [r"\bplaque(s)?\b", r"\bthick(ened)? patch(es)?\b"],
+    "oozing":             [r"\booz(e|ing)\b", r"\bweeping\b", r"\bdischarge\b",
+                           r"\bcrust(ing|ed)?\b"],
+    "skin_ulcer":         [r"\bskin ulcer\b", r"\bnon-?healing (sore|wound)\b",
+                           r"\bopen sore\b"],
+    "hyperpigmentation":  [r"\bdark (spot|patch)(es)?\b", r"\bpigmentation\b",
+                           r"\bhyperpigment\w*\b", r"\bmelasma\b", r"\btanning\b"],
+    "hypopigmentation":   [r"\bwhite patch(es)?\b", r"\bwhite spot(s)?\b",
+                           r"\bdepigment\w*\b", r"\bloss of colou?r\b"],
+    "hair_loss":          [r"\bhair ?(fall|loss)\b", r"\blosing hair\b",
+                           r"\bbald(ing|ness)?\b", r"\bbald patch(es)?\b",
+                           r"\bthinning hair\b", r"\balopecia\b"],
+    "dandruff":           [r"\bdandruff\b", r"\bflaky scalp\b", r"\bitchy scalp\b"],
+    "nail_changes":       [r"\bnail (pitting|discolou?ration|thickening)\b",
+                           r"\bbrittle nails?\b", r"\bnail fungus\b",
+                           r"\bdiscolou?red nails?\b"],
+    "burning_skin":       [r"\bburning (sensation|skin)\b", r"\bsting(ing)?\b"],
+    "swelling_skin":      [r"\bswollen\b", r"\bswelling\b", r"\bangioedema\b",
+                           r"\bpuffy\b"],
+    "photosensitivity":   [r"\bphotosensitiv\w*\b", r"\bsun sensitiv\w*\b",
+                           r"\bworse in (the )?sun\b"],
+    "ring_lesion":        [r"\bring ?-?(shaped|like)\b", r"\bring ?worm\b",
+                           r"\bcircular (patch|lesion)\b"],
+
+    # ── General / systemic ──────────────────────────────────────────────────
     "fever":              [r"\bfever\b", r"\bhigh temperature\b", r"\btemperature\b"],
     "chills":             [r"\bchill(s|ing)?\b", r"\bshiver(ing)?\b"],
     "sore_throat":        [r"\bsore throat\b", r"\bthroat pain\b", r"\bthroat ache\b"],
@@ -31,8 +77,38 @@ SYMPTOM_PATTERNS: dict[str, list[str]] = {
     "dizziness":          [r"\bdizzy\b", r"\bdizziness\b"],
 }
 
+# Body sites — morphology plus site is what actually drives a dermatological
+# differential ("scaly plaques on the elbows" vs "on the flexures").
+BODY_SITE_PATTERNS: dict[str, list[str]] = {
+    "scalp":      [r"\bscalp\b", r"\bhead skin\b"],
+    "face":       [r"\bface\b", r"\bfacial\b", r"\bcheek(s)?\b", r"\bforehead\b"],
+    "trunk":      [r"\btrunk\b", r"\bchest\b", r"\bback\b", r"\babdomen\b", r"\bstomach\b"],
+    "arms":       [r"\barm(s)?\b", r"\belbow(s)?\b", r"\bforearm(s)?\b"],
+    "hands":      [r"\bhand(s)?\b", r"\bpalm(s)?\b", r"\bfinger(s)?\b"],
+    "legs":       [r"\bleg(s)?\b", r"\bknee(s)?\b", r"\bshin(s)?\b", r"\bthigh(s)?\b"],
+    "feet":       [r"\bfoot\b", r"\bfeet\b", r"\bsole(s)?\b", r"\bbetween (the )?toes\b",
+                   r"\btoe(s)?\b"],
+    "groin":      [r"\bgroin\b", r"\binner thigh\b", r"\bprivate area\b"],
+    "flexures":   [r"\bflexur\w*\b", r"\bskin fold(s)?\b", r"\bunderarm(s)?\b",
+                   r"\barmpit(s)?\b", r"\bbehind the knee(s)?\b"],
+    "nails":      [r"\bnail(s)?\b", r"\bfingernail(s)?\b", r"\btoenail(s)?\b"],
+}
+
 # Distinguishing between acute conditions and chronic conditions
 CHRONIC_PATTERNS: dict[str, list[str]] = {
+    # ── Chronic skin disease ────────────────────────────────────────────────
+    "psoriasis":          [r"\bpsoriasis\b", r"\bpsoriatic\b"],
+    "atopic_dermatitis":  [r"\batopic dermatitis\b", r"\beczema\b", r"\batopy\b"],
+    "vitiligo":           [r"\bvitiligo\b", r"\bleucoderma\b", r"\bleukoderma\b"],
+    "rosacea":            [r"\brosacea\b"],
+    "chronic_urticaria":  [r"\bchronic (urticaria|hives)\b"],
+    "acne_vulgaris":      [r"\bacne vulgaris\b", r"\bchronic acne\b"],
+    "lichen_planus":      [r"\blichen planus\b"],
+    "hidradenitis":       [r"\bhidradenitis\b"],
+    "androgenetic_alopecia": [r"\bandrogenetic alopecia\b", r"\bmale ?pattern\b",
+                              r"\bfemale ?pattern\b"],
+
+    # ── General comorbidities ───────────────────────────────────────────────
     "diabetes":           [r"\bdiabetes\b", r"\bdiabetic\b"],
     "hypertension":       [r"\bhypertension\b", r"\bhigh blood pressure\b", r"\bhigh bp\b"],
     "asthma":             [r"\basthma\b", r"\basthmatic\b"],
@@ -42,6 +118,28 @@ CHRONIC_PATTERNS: dict[str, list[str]] = {
 }
 
 CONDITION_PATTERNS: dict[str, list[str]] = {
+    # ── Acute / named skin conditions ───────────────────────────────────────
+    "tinea":              [r"\btinea\b", r"\bring ?worm\b", r"\bdhobi ?itch\b",
+                           r"\bjock itch\b", r"\bathlete'?s foot\b"],
+    "candidiasis":        [r"\bcandid(a|iasis)\b", r"\byeast infection\b"],
+    "scabies":            [r"\bscabies\b", r"\bkhujli mite\b", r"\bmites?\b"],
+    "impetigo":           [r"\bimpetigo\b"],
+    "cellulitis":         [r"\bcellulitis\b", r"\berysipelas\b"],
+    "folliculitis":       [r"\bfolliculitis\b"],
+    "herpes":             [r"\bherpes\b", r"\bcold sore(s)?\b", r"\bshingles\b",
+                           r"\bzoster\b"],
+    "warts":              [r"\bwart(s)?\b", r"\bverruca\b", r"\bmolluscum\b"],
+    "contact_dermatitis": [r"\bcontact dermatitis\b", r"\ballergic dermatitis\b"],
+    "seborrhoeic_derm":   [r"\bseborrh?oeic\b", r"\bseborrheic\b"],
+    "drug_eruption":      [r"\bdrug (rash|eruption|reaction)\b",
+                           r"\bstevens[- ]?johnson\b", r"\bsjs\b"],
+    "leprosy":            [r"\bleprosy\b", r"\bhansen'?s\b"],
+    "melanoma":           [r"\bmelanoma\b"],
+    "skin_cancer":        [r"\bskin cancer\b", r"\bbasal cell\b",
+                           r"\bsquamous cell\b", r"\bbcc\b", r"\bscc\b"],
+    "keloid":             [r"\bkeloid\b", r"\bhypertrophic scar\b"],
+
+    # ── General ─────────────────────────────────────────────────────────────
     "flu":                [r"\bflu\b", r"\binfluenza\b"],
     "strep_throat":       [r"\bstrep throat\b"],
     "covid":              [r"\bcovid\b", r"\bcoronavirus\b"],
@@ -55,9 +153,54 @@ ALLERGY_PATTERNS: dict[str, list[str]] = {
     "dust":          [r"\bdust allergy\b", r"\ballergic to dust\b"],
     "peanuts":       [r"\bpeanut allergy\b", r"\ballergic to peanuts\b"],
     "shellfish":     [r"\bshellfish allergy\b"],
+    # ── Contact allergens — the derma-specific ones ─────────────────────────
+    "nickel":        [r"\bnickel\b", r"\ballergic to (metal|jewell?ery)\b"],
+    "fragrance":     [r"\bfragrance allergy\b", r"\ballergic to (perfume|fragrance)\b"],
+    "hair_dye":      [r"\bhair ?dye allergy\b", r"\ballergic to hair ?dye\b", r"\bppd\b"],
+    "latex":         [r"\blatex allergy\b", r"\ballergic to latex\b"],
+    "cosmetics":     [r"\ballergic to (cosmetics|makeup)\b", r"\bcosmetic allergy\b"],
+    "sulfa":         [r"\bsulfa (allergy|drugs?)\b", r"\ballergic to sulfa\b"],
 }
 
 DRUG_PATTERNS: dict[str, list[str]] = {
+    # ── Topical steroids ────────────────────────────────────────────────────
+    "hydrocortisone":[r"\bhydrocortisone\b"],
+    "betamethasone": [r"\bbetamethasone\b", r"\bbetnovate\b"],
+    "clobetasol":    [r"\bclobetasol\b", r"\btenovate\b", r"\bdermovate\b"],
+    "mometasone":    [r"\bmometasone\b", r"\belocon\b"],
+    # ── Antifungals ─────────────────────────────────────────────────────────
+    "clotrimazole":  [r"\bclotrimazole\b", r"\bcandid\b"],
+    "ketoconazole":  [r"\bketoconazole\b", r"\bnizoral\b"],
+    "terbinafine":   [r"\bterbinafine\b", r"\blamisil\b"],
+    "itraconazole":  [r"\bitraconazole\b", r"\bsporanox\b"],
+    "fluconazole":   [r"\bfluconazole\b"],
+    # ── Acne ────────────────────────────────────────────────────────────────
+    "benzoyl_peroxide":[r"\bbenzoyl peroxide\b", r"\bbenzac\b"],
+    "adapalene":     [r"\badapalene\b", r"\bdifferin\b"],
+    "tretinoin":     [r"\btretinoin\b", r"\bretino\b"],
+    "isotretinoin":  [r"\bisotretinoin\b", r"\baccutane\b", r"\bsotret\b"],
+    "clindamycin":   [r"\bclindamycin\b", r"\bclindac\b"],
+    # ── Antihistamines ──────────────────────────────────────────────────────
+    "cetirizine":    [r"\bcetirizine\b", r"\bcetzine\b"],
+    "levocetirizine":[r"\blevocetirizine\b", r"\blevocet\b"],
+    "fexofenadine":  [r"\bfexofenadine\b", r"\ballegra\b"],
+    "hydroxyzine":   [r"\bhydroxyzine\b", r"\batarax\b"],
+    # ── Antibacterials / scabies / psoriasis / hair ─────────────────────────
+    "mupirocin":     [r"\bmupirocin\b", r"\bbactroban\b", r"\bt-?bact\b"],
+    "fusidic_acid":  [r"\bfusidic acid\b", r"\bfucidin\b"],
+    "doxycycline":   [r"\bdoxycycline\b"],
+    "permethrin":    [r"\bpermethrin\b"],
+    "ivermectin":    [r"\bivermectin\b"],
+    "calcipotriol":  [r"\bcalcipotriol\b", r"\bdaivonex\b"],
+    "methotrexate":  [r"\bmethotrexate\b"],
+    "tacrolimus":    [r"\btacrolimus\b", r"\bprotopic\b"],
+    "minoxidil":     [r"\bminoxidil\b", r"\bmintop\b", r"\brogaine\b"],
+    "finasteride":   [r"\bfinasteride\b"],
+    "salicylic_acid":[r"\bsalicylic acid\b"],
+    "emollient":     [r"\bemollient(s)?\b", r"\bmoisturis\w*\b", r"\bmoisturiz\w*\b",
+                      r"\bvaseline\b", r"\bpetroleum jelly\b"],
+    "sunscreen":     [r"\bsunscreen\b", r"\bsunblock\b", r"\bspf\b"],
+    # ── General ─────────────────────────────────────────────────────────────
     "paracetamol":   [r"\bparacetamol\b", r"\bacetaminophen\b", r"\btylenol\b"],
     "ibuprofen":     [r"\bibuprofen\b", r"\badvil\b", r"\bnurofen\b"],
     "aspirin":       [r"\baspirin\b"],

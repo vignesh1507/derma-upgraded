@@ -1,8 +1,14 @@
 name: Deploy to ECS
 
 on:
-  push:
-    branches: [main]
+  # Automatic deploy-on-push is DISABLED deliberately. Publishing the
+  # dermatology re-skin must not fire an ECS deployment as a side effect of
+  # pushing code. Deploy stays available on demand via the Actions tab
+  # (Run workflow), so nothing is lost — it just requires an explicit
+  # decision instead of happening implicitly.
+  # To restore automatic deploys, uncomment the push trigger below.
+  # push:
+  #   branches: [main]
   workflow_dispatch:
 
 env:

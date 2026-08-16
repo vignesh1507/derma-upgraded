@@ -1,6 +1,6 @@
 # Frontend integration guide
 
-The Enervera Medical GraphRAG service is **API-only**. Any UI — web app, mobile app, embedded widget — runs in its own repository / deployment and talks to this service over HTTPS. This document is the contract between that frontend and the service.
+The Enervera Dermatology GraphRAG service is **API-only**. Any UI — web app, mobile app, embedded widget — runs in its own repository / deployment and talks to this service over HTTPS. This document is the contract between that frontend and the service.
 
 If you're reading this from a frontend repo: everything you need is here. The backend is documented elsewhere; you should never need to read backend code to integrate.
 

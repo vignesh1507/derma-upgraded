@@ -111,7 +111,7 @@ class GraphRAGPipeline:
                 )
                 return msg
             elif final_action == "emergency_redirect":
-                msg = "🚨 EMERGENCY: Your symptoms sound like a serious emergency. Please call emergency services (112 / 911) immediately or go to the nearest hospital."
+                msg = "🚨 EMERGENCY: Your symptoms sound like a serious emergency. Please call emergency services immediately — 112, or 108 / 102 for an ambulance — or go to the nearest hospital."
                 print(f"\n{msg}\n")
                 self.memory_adapter.update_after_interaction(
                     session=session,

@@ -22,6 +22,17 @@ class QueryConfig:
 # ---------------------------------------------------------------------------
 # Registry — one config object per query type
 # ---------------------------------------------------------------------------
+# priority_entity_types is matched EXACTLY against the `type` prefix of a corpus
+# entity ("disease: psoriasis" -> "disease"), see
+# graphrag/processors/entity_processor.py.
+#
+# Left at the general-medicine defaults on purpose. The dermatology corpus
+# (`enervara-specialists`, namespace `dermatology`) stores entities UNTYPED —
+# bare names like "psoriasis", "papule", "erythema", "acitretin" — so there is
+# no type vocabulary to bias towards and any value here is a no-op. Sampled
+# 1 821 entity mentions across 8 representative queries: 1 819 carried no type
+# prefix. Revisit only if the corpus is re-ingested with typed entities.
+
 QUERY_CONFIGS: dict[QueryType, QueryConfig] = {
 
     QueryType.SYMPTOM_QUERY: QueryConfig(

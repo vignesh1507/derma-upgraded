@@ -49,8 +49,19 @@ GATEKEEPER_INTENT_TO_QUERYTYPE: dict[str, QueryType] = {
 # Trivial inputs that need no external knowledge AND no gatekeeper LLM call
 # once a session is established. Match-anchored so "hi there how are you" does
 # not slip through.
+#
+# "yes" / "no" / "sure" are DELIBERATELY ABSENT. This service asks closed
+# clarifying questions, so a bare "no." is the discriminating clinical answer,
+# not an acknowledgment. Treating it as trivial skipped the gatekeeper, which
+# dropped vector_top_k to 0 AND set query_type to "unknown" — and "unknown" is
+# outside the exposure-relevant intents, so the layer telling the model to use
+# [LOCAL CONDITIONS] was stripped too. Observed live: a Leh consultation
+# concluded "irritant contact dermatitis, likely harsh soaps" on a turn where
+# the prompt carried "dew point 4C — air is very dry", with no corpus retrieval
+# behind the treatment plan. One extra analyzer call per yes/no turn is the
+# correct trade.
 TRIVIAL_INPUT = re.compile(
-    r"^\s*(hi|hello|hey|thanks?|thank\s*you|ok|okay|yes|no|sure|got\s*it|cool|nice|great|noted)[!.\s]*$",
+    r"^\s*(hi|hello|hey|thanks?|thank\s*you|ok|okay|got\s*it|cool|nice|great|noted)[!.\s]*$",
     re.IGNORECASE,
 )
 
@@ -85,10 +96,30 @@ def decide_routing(
     if is_trivial_input(raw_query) and wm.turn_count > 0:
         return RoutingMode.NO_RETRIEVAL, QueryType.UNKNOWN
 
-    # 2) Gatekeeper said this is conversational continuation → memory only.
+    # 2) Gatekeeper said this is conversational continuation.
     intent = (analysis or {}).get("intent") or ""
     action = (analysis or {}).get("final_action") or ""
-    if intent in {"greeting", "followup_query"} or action == "route_to_followup":
+    is_continuation = intent == "followup_query" or action == "route_to_followup"
+
+    if intent == "greeting":
+        return RoutingMode.NO_RETRIEVAL, QueryType.UNKNOWN
+
+    if is_continuation:
+        # A continuation of a CLINICAL thread is usually where the consultation
+        # actually concludes — "so what do you think is causing it?" arrives as
+        # followup_query. Sending that to NO_RETRIEVAL/UNKNOWN cost two things
+        # at once: the concluding answer had no corpus behind it, and
+        # QueryType.UNKNOWN suppressed the exposure layer, so the model was
+        # handed [LOCAL CONDITIONS] with no instruction to use them. Observed
+        # live in a Leh consultation that concluded on ambient dryness data it
+        # had been told to ignore.
+        #
+        # Gated on real clinical state, so a purely social continuation still
+        # costs nothing. SYMPTOM_QUERY is the carry-over type: it is the
+        # general clinical-conversation type this platform routes on, and the
+        # one the exposure and OTC layers key off.
+        if _has_memory_clinical_context(wm):
+            return RoutingMode.MEMORY_FIRST, QueryType.SYMPTOM_QUERY
         return RoutingMode.NO_RETRIEVAL, QueryType.UNKNOWN
 
     # 3) Gatekeeper failed (empty / no intent) → degrade DOWN to the cheap path,

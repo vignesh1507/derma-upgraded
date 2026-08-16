@@ -63,7 +63,7 @@ def emergency_blocks() -> list[Block]:
             type="next_steps",
             data=NextStepsData(
                 steps=[
-                    "Call your local emergency number now (112 / 911 / 108).",
+                    "Call emergency services now — 112, or 108 / 102 for an ambulance.",
                     "Go to the nearest emergency room or hospital immediately.",
                     "If symptoms worsen while waiting, call back and report the change.",
                 ]

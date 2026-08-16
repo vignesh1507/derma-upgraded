@@ -21,6 +21,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.orchestration.prompt_layers import (
+    layer_exposure_history,
     _INTENT_BLOCK_PLANS,
     compose_system_prompt,
     layer_block_plan,
@@ -44,11 +45,14 @@ from graphrag.schemas.blocks import BLOCK_TYPES
 def test_core_identity_experienced_clinician_persona():
     out = layer_core_identity()
     lo = out.lower()
-    # General-medicine physician, NOT a single specialty.
-    assert "general" in lo and ("physician" in lo or "medicine" in lo)
-    assert "gastroenterology clinician" not in lo
-    # Breadth across body systems (not GI-locked).
-    assert "respiratory" in lo or "cardiac" in lo or "neurological" in lo
+    # Dermatology specialist, explicitly scoped to the skin.
+    assert "dermatologist" in lo
+    assert "general (internal) medicine" not in lo
+    # Scope is stated in terms of skin structures.
+    assert "skin" in lo
+    assert "hair" in lo and "nails" in lo
+    # Must hand off rather than reason past its specialty.
+    assert "specialist" in lo
     assert "thoughtful" in lo or "doctor in clinic" in lo
     # Probabilistic clinical reasoning chain is the ethos.
     assert "probabilistic" in lo
@@ -499,7 +503,7 @@ def test_compose_joins_all_layers_for_substantive_with_name_critical():
         has_name=True,
     )
     # Markers from every non-empty layer must appear in the composed prompt.
-    assert "experienced physician practising general" in out       # L1
+    assert "experienced consultant dermatologist" in out          # L1
     assert "SAFETY & EVIDENCE" in out                              # L2
     assert "⚠️ CRITICAL" in out and "Hey Aarav" in out             # L3
     assert "MEMORY & CONTEXT REUSE" in out                         # L4
@@ -565,7 +569,7 @@ def test_compose_no_blank_line_runs():
 def test_compose_defaults_safe():
     # No kwargs other than query_type — defaults risk=none, has_name=False, prose.
     out = compose_system_prompt(query_type="symptom_query")
-    assert "experienced physician practising general" in out
+    assert "experienced consultant dermatologist" in out
     assert "RESPONSE FORMAT" in out
     assert "⚠️" not in out
     assert "Hey Aarav" not in out
@@ -586,6 +590,17 @@ def test_compose_typical_path_fits_token_budget():
     full consultation-flow spec (working assessment, convergence/completion,
     info-gain questioning, educational answer-first). If this keeps climbing,
     de-duplicate Layers 6 and 7 rather than lifting the cap again.
+
+    The dermatology re-skin deliberately held this line: the derma persona was
+    written to roughly the same length as the general-medicine one it replaced,
+    so a specialty swap costs no extra budget.
+
+    Raised 7000 -> 8400 for the EXPOSURE HISTORY layer (~1170 chars). That is
+    new clinical capability, not bloat: dermatology is the specialty where the
+    exposure IS often the diagnosis (contact dermatitis, photodermatoses,
+    occupational hand eczema), and without the layer the model generalised
+    about weather instead of using the readings it was given. Gated to
+    history-taking intents, so education and drug turns pay nothing.
     """
     out = compose_system_prompt(
         query_type="symptom_query",
@@ -593,7 +608,94 @@ def test_compose_typical_path_fits_token_budget():
         has_name=False,
     )
     chars = len(out)
-    assert chars <= 7000, (
+    assert chars <= 8400, (
         f"Composed prompt is {chars} chars (~{chars // 4} tokens); "
         f"tighten layer text or re-evaluate budget."
     )
+
+
+# ---------------------------------------------------------------------------
+# Exposure history layer (dermatology)
+# ---------------------------------------------------------------------------
+
+class TestExposureHistoryLayer:
+    @pytest.mark.parametrize("intent", [
+        "symptom_query", "diagnosis_query", "followup_query",
+        "risk_assessment", "prevention_query",
+    ])
+    def test_emitted_for_history_taking_intents(self, intent):
+        assert "EXPOSURE HISTORY" in layer_exposure_history(query_type=intent)
+
+    @pytest.mark.parametrize("intent", [
+        "condition_explanation", "medication_query", "lab_interpretation",
+        "comparison_query", "greeting", "",
+    ])
+    def test_omitted_where_a_review_is_noise(self, intent):
+        assert layer_exposure_history(query_type=intent) == ""
+
+    def test_covers_skin_specific_exposures(self):
+        """Contact allergens and occupation are often the diagnosis in derma."""
+        text = layer_exposure_history(query_type="symptom_query").lower()
+        for factor in ("cosmetics", "detergent", "hair dye", "jewellery",
+                       "occupational", "travel", "photosensitivity", "contacts"):
+            assert factor in text, f"{factor} missing from exposure review"
+
+    def test_forbids_settling_on_a_single_cause(self):
+        text = layer_exposure_history(query_type="symptom_query")
+        assert "COMBINE" in text and "do NOT stop there" in text
+
+    def test_requires_citing_real_figures(self):
+        text = layer_exposure_history(query_type="symptom_query")
+        assert "cite the actual figures" in text and "LOCAL CONDITIONS" in text
+
+    def test_uv_is_worth_raising_even_when_unrelated(self):
+        """Sun protection is advice a dermatologist gives anyway."""
+        text = layer_exposure_history(query_type="symptom_query")
+        assert "High UV is worth raising even when the complaint is" in text
+
+    def test_relevance_is_mechanistic_not_regional_deviation(self):
+        """
+        Two failure modes pull in opposite directions and the layer must hold
+        both.
+
+        Over-reading: Shillong sits near 98% humidity permanently, so raising
+        it against a mole check is noise.
+
+        Under-reading: the earlier wording ("normal for the region is NOT
+        evidence") told the model to discount Leh's dew point of 4C precisely
+        BECAUSE Leh is always dry — and it duly blamed harsh soaps for
+        cracked knuckles in Ladakh.
+
+        The resolution is that relevance follows the MECHANISM linking a
+        reading to the presenting complaint, never the deviation from local
+        normal — which is also what models.py states: skin responds to
+        absolute conditions.
+        """
+        text = layer_exposure_history(query_type="symptom_query")
+        # irrelevant to the complaint → still dropped
+        assert "irrelevant to the complaint, ignore" in text
+        # but regional normality alone is no longer grounds to discount
+        assert "do NOT discount a reading merely because it is normal" in text
+        assert "ABSOLUTE conditions" in text
+
+    def test_reaches_the_composed_prompt(self):
+        assert "EXPOSURE HISTORY" in compose_system_prompt(
+            query_type="symptom_query", risk_level="none")
+
+    def test_absent_from_composed_prompt_for_education(self):
+        assert "EXPOSURE HISTORY" not in compose_system_prompt(
+            query_type="condition_explanation", risk_level="none")
+
+
+def test_regional_normality_does_not_discount_a_reading() -> None:
+    """
+    The layer previously said ambient humidity "normal for the region is NOT
+    evidence about this patient" — which contradicted the service's own
+    physiology (models.py: skin responds to ABSOLUTE conditions) and told the
+    model to discount Leh's dew point of 4C precisely because Leh is always
+    dry. That is what produced a Leh consultation blaming harsh soaps.
+    """
+    text = layer_exposure_history(query_type="symptom_query").lower()
+    assert "absolute conditions" in text
+    assert "normal for that region" in text
+    assert "not evidence about this patient" not in text

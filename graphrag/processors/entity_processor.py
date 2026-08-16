@@ -44,15 +44,32 @@ class EntityProcessor:
             chunk_summaries.append(md.get("summary", ""))
 
             for ent_str in md.get("entities", []):
-                if ":" not in ent_str:
-                    continue
-                ent_type, ent_name = ent_str.split(":", 1)
+                # Two corpus conventions are in use:
+                #   typed   — "disease: psoriasis"  (e.g. the `enervera` index)
+                #   untyped — "psoriasis"           (e.g. `enervara-specialists`)
+                # Skipping untyped entities discarded EVERY entity in an
+                # untyped corpus, leaving extracted_entities empty. That is
+                # invisible while GRAPH_RETRIEVAL_ENABLED is false, but the
+                # moment graph traversal is switched on it would be skipped
+                # forever with only a "no entities" line in the log.
+                if ":" in ent_str:
+                    ent_type, ent_name = ent_str.split(":", 1)
+                    ent_type_clean = ent_type.strip().lower()
+                else:
+                    ent_name = ent_str
+                    ent_type_clean = ""
+
                 ent_name_clean = ent_name.strip().lower()
-                ent_type_clean = ent_type.strip().lower()
+                if not ent_name_clean:
+                    continue
 
                 extracted_entities.add(ent_name_clean)
 
-                if priority_entity_types and ent_type_clean in priority_entity_types:
+                if (
+                    ent_type_clean
+                    and priority_entity_types
+                    and ent_type_clean in priority_entity_types
+                ):
                     priority_entities.add(ent_name_clean)
 
         # ── Build final entity list: priority first, then rest (cap 30) ────

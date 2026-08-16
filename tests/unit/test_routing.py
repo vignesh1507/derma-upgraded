@@ -69,8 +69,8 @@ def analysis(intent: str, **extra: Any) -> dict[str, Any]:
 
 @pytest.mark.parametrize(
     "raw",
-    ["hi", "Hello", "hey!", "thanks", "thank you", "ok.", "okay", "yes", "no",
-     "sure", "got it", "cool", "nice", "great", "noted", "  hi  ", "Hi!"],
+    ["hi", "Hello", "hey!", "thanks", "thank you", "ok.", "okay",
+     "got it", "cool", "nice", "great", "noted", "  hi  ", "Hi!"],
 )
 def test_is_trivial_input_matches_acknowledgments(raw: str) -> None:
     assert is_trivial_input(raw)
@@ -90,6 +90,30 @@ def test_is_trivial_input_matches_acknowledgments(raw: str) -> None:
 )
 def test_is_trivial_input_rejects_substantive_text(raw: str) -> None:
     assert not is_trivial_input(raw)
+
+
+@pytest.mark.parametrize("raw", ["yes", "no", "no.", "Yes", "NO", "sure", " yes "])
+def test_closed_answers_are_not_trivial(raw: str) -> None:
+    """
+    A bare yes/no answers a clarifying question THIS service asked, so it is
+    clinical content, not an acknowledgment.
+
+    Regression: classifying "no." as trivial skipped the gatekeeper, which set
+    vector_top_k = 0 (concluding answer generated with no corpus behind it) and
+    query_type = "unknown", which in turn suppressed the exposure-history layer
+    so the model was handed [LOCAL CONDITIONS] with no instruction to use them.
+    """
+    assert not is_trivial_input(raw)
+
+
+def test_closed_answer_still_reaches_retrieval_in_session() -> None:
+    """The turn that concludes a consultation must not be the ungrounded one."""
+    mode, _ = decide_routing(
+        analysis=analysis("symptom_query", medical_entities={"symptoms": ["rash"]}),
+        wm=make_wm(turn_count=3),
+        raw_query="no.",
+    )
+    assert mode is not RoutingMode.NO_RETRIEVAL
 
 
 # ---------------------------------------------------------------------------
@@ -135,14 +159,22 @@ def test_acknowledgment_in_session_skips_retrieval() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_followup_query_skips_retrieval() -> None:
+def test_followup_query_with_clinical_state_keeps_retrieval() -> None:
+    """
+    CHANGED DELIBERATELY. This previously asserted NO_RETRIEVAL/UNKNOWN.
+
+    "is it serious?" about a known fever is where a consultation concludes, and
+    concluding with no corpus — and with the exposure layer suppressed by
+    QueryType.UNKNOWN — was the defect. With clinical state in the session a
+    continuation now keeps a cheap retrieval budget and a usable query_type.
+    """
     mode, qt = decide_routing(
         analysis=analysis("followup_query", final_action="route_to_followup"),
         wm=make_wm(turn_count=2, symptoms=["fever"]),
         raw_query="is it serious?",
     )
-    assert mode == RoutingMode.NO_RETRIEVAL
-    assert qt == QueryType.UNKNOWN
+    assert mode == RoutingMode.MEMORY_FIRST
+    assert qt == QueryType.SYMPTOM_QUERY
 
 
 def test_greeting_intent_skips_retrieval_even_without_pregate_match() -> None:
@@ -317,3 +349,55 @@ def test_intent_not_in_mapping_uses_memory_first() -> None:
     )
     assert mode == RoutingMode.MEMORY_FIRST
     assert qt == QueryType.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# Clinical continuations must keep their corpus AND their query_type
+# ---------------------------------------------------------------------------
+
+
+def test_clinical_followup_keeps_retrieval_and_query_type() -> None:
+    """
+    Regression: "so what do you think is causing it?" arrives as
+    followup_query. Routing it to NO_RETRIEVAL/UNKNOWN meant the concluding
+    turn of a consultation had no corpus behind it, and QueryType.UNKNOWN
+    stripped the exposure layer that tells the model to use [LOCAL CONDITIONS].
+    """
+    mode, qt = decide_routing(
+        analysis=analysis("followup_query"),
+        wm=make_wm(turn_count=4, symptoms=["cracked knuckles"]),
+        raw_query="so what do you think is causing it?",
+    )
+    assert mode is RoutingMode.MEMORY_FIRST
+    assert qt is QueryType.SYMPTOM_QUERY
+
+
+def test_route_to_followup_action_behaves_the_same() -> None:
+    mode, qt = decide_routing(
+        analysis={"intent": "other", "final_action": "route_to_followup"},
+        wm=make_wm(turn_count=4, conditions=["eczema"]),
+        raw_query="and what about at night?",
+    )
+    assert mode is RoutingMode.MEMORY_FIRST
+    assert qt is QueryType.SYMPTOM_QUERY
+
+
+def test_social_followup_without_clinical_state_stays_cheap() -> None:
+    """No clinical content in the session — nothing to retrieve, keep it free."""
+    mode, qt = decide_routing(
+        analysis=analysis("followup_query"),
+        wm=make_wm(turn_count=2),
+        raw_query="what did you say before?",
+    )
+    assert mode is RoutingMode.NO_RETRIEVAL
+    assert qt is QueryType.UNKNOWN
+
+
+def test_greeting_is_still_free() -> None:
+    mode, qt = decide_routing(
+        analysis=analysis("greeting"),
+        wm=make_wm(turn_count=3, symptoms=["rash"]),
+        raw_query="hello again",
+    )
+    assert mode is RoutingMode.NO_RETRIEVAL
+    assert qt is QueryType.UNKNOWN

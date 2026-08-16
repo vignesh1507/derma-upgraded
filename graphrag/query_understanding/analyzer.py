@@ -299,16 +299,46 @@ ENTITY EXTRACTION  (fill medical_entities every turn)
 This is the system's conversation MEMORY — extract reliably so it never re-asks
 what the patient already said. Capture what THIS message states (downstream code
 accumulates across turns; you don't need prior turns):
-* symptoms: complaints affirmed this turn ("sneezing", "watery eyes", "chest pain").
-* drugs: medications named ("paracetamol", "metformin").
-* conditions: named diagnoses the patient has ("CKD", "asthma").
-* allergies: stated allergies ("penicillin").
+* symptoms: complaints affirmed this turn ("itching", "scaly patches", "hair fall").
+* drugs: medications named ("clobetasol", "isotretinoin", "cetirizine").
+* conditions: named diagnoses the patient has ("psoriasis", "atopic dermatitis").
+* allergies: stated allergies ("penicillin", "nickel", "fragrance").
 * duration: how long it has lasted, verbatim ("5 days", "2 weeks", "since this morning").
-* severity: severity words or measured values ("severe", "mild", "102°F", "9/10").
+* severity: severity words or measured values ("severe", "mild", "9/10", "BSA 10%").
 * negated: findings the patient explicitly DENIES this turn — store the plain
-  finding, not the negation word ("no fever", "no swelling", "no trouble
-  swallowing" -> ["fever", "swelling", "difficulty swallowing"]).
+  finding, not the negation word ("no fever", "no blisters", "no oozing"
+  -> ["fever", "blisters", "oozing"]).
 Use lowercase, concise noun phrases. Extract ONLY what the message states; never invent.
+
+DERMATOLOGY ENTITY HINTS — this deployment is a skin service, so recognise the
+vocabulary patients actually use, including Indian-English and lay terms:
+* symptoms / morphology: itching, khujli, burning, stinging, rash, red patches,
+  scaly or flaky patches, dryness, papules, pimples, pustules, boils, blisters,
+  vesicles, wheals, hives, plaques, nodules, ulcer, oozing, crusting, bleeding,
+  pigmentation, dark spots, white patches, redness, swelling, hair fall,
+  thinning hair, bald patch, dandruff, nail pitting, nail discolouration,
+  thickened nails, ring-shaped lesion, spreading rash, photosensitivity.
+* body sites matter in derma — capture them as part of the symptom when stated
+  ("scalp", "face", "elbows", "knees", "groin", "between toes", "palms",
+  "soles", "nails", "underarms", "back", "trunk", "flexures").
+* drugs: topical steroids (hydrocortisone, betamethasone, clobetasol,
+  mometasone), calcineurin inhibitors (tacrolimus, pimecrolimus), antifungals
+  (clotrimazole, ketoconazole, terbinafine, fluconazole, itraconazole),
+  antibiotics used in skin (mupirocin, fusidic acid, doxycycline,
+  azithromycin), acne agents (benzoyl peroxide, adapalene, tretinoin,
+  clindamycin, isotretinoin), antihistamines (cetirizine, levocetirizine,
+  hydroxyzine, fexofenadine), scabies treatment (permethrin, ivermectin),
+  psoriasis agents (calcipotriol, methotrexate, biologics), minoxidil,
+  finasteride, salicylic acid, emollients and moisturisers, sunscreen.
+* conditions: acne, eczema, atopic dermatitis, contact dermatitis, seborrhoeic
+  dermatitis, psoriasis, urticaria, angioedema, tinea (corporis, cruris,
+  pedis, capitis, versicolor), ringworm, candidiasis, scabies, impetigo,
+  cellulitis, folliculitis, herpes, shingles, warts, molluscum, vitiligo,
+  melasma, alopecia areata, androgenetic alopecia, telogen effluvium,
+  rosacea, lichen planus, keloid, drug eruption, Stevens-Johnson syndrome,
+  leprosy/Hansen's disease, melanoma, basal cell carcinoma.
+* Treat itch or pain scores ("7/10") and body-surface-area estimates as
+  severity, not duration.
 
 ==================================================
 OUTPUT FORMAT  (STRICT JSON only)

@@ -47,8 +47,12 @@ services:
                               # leave unset/empty for "*" while testing
 
       # --- non-secret config (committed defaults) ---
+      # Dermatology knowledge corpus (llama-text-embed-v2 / 1024 / cosine)
       - key: PINECONE_INDEX_NAME
-        value: enervera
+        value: enervara-specialists
+      # Must be set: enervara-specialists has no default namespace
+      - key: PINECONE_NAMESPACE
+        value: dermatology
       - key: PINECONE_EPISODIC_INDEX_NAME
         value: episodicmemory
       - key: EPISODIC_MEMORY_ENABLED

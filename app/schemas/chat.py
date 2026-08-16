@@ -33,6 +33,10 @@ class ChatRequest(BaseModel):
     # New identity contract (optional). Preferred over the legacy fields above
     # when ENABLE_IDENTITY_V1 is on; ignored/absent keeps legacy behaviour.
     identity: IdentityEnvelope | None = None
+    # Optional patient location for environmental context (UV, moisture, AQI).
+    # "City, Country" or "lat,lon". Ignored unless ENVIRONMENTAL_CONTEXT_ENABLED.
+    # Note: Indian PIN codes are NOT supported by the upstream provider.
+    location: str | None = Field(default=None, max_length=120)
 
 
 class ChatResponse(BaseModel):

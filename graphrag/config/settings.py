@@ -59,9 +59,40 @@ class Settings(BaseSettings):
     # analyser's internals; enable only for local debugging.
     EXPOSE_DIAGNOSTICS: bool = False
 
+    # ----- Environmental context (UV, moisture, air quality) -----
+    # Supplementary local conditions injected alongside memory. Off by default:
+    # it adds an outbound call. Fails open in every error path.
+    ENVIRONMENTAL_CONTEXT_ENABLED: bool = False
+    # WeatherAPI.com key. Env var is WEATHER_API (matches the deploy secret).
+    WEATHER_API: Optional[str] = None
+    # Bare city names resolve against a global gazetteer, so "Delhi" alone
+    # returns Delhi, Ontario. Unqualified locations get this country appended.
+    ENVIRONMENTAL_DEFAULT_COUNTRY: str = "India"
+    ENVIRONMENTAL_TIMEOUT_S: float = 2.5
+    ENVIRONMENTAL_CACHE_TTL_S: float = 3600.0
+
     # ----- Pinecone (vector index) -----
     PINECONE_API_KEY: Optional[str] = None
-    PINECONE_INDEX_NAME: str = "enervera"
+    # Dermatology knowledge corpus. The persona alone does not make answers
+    # specialty-correct — this index is what grounds them.
+    #
+    # Contract any replacement must satisfy: embedding model llama-text-embed-v2,
+    # dimension 1024, metric cosine, chunk metadata carrying at least
+    # `summary` and `entities` (the entity processor reads both).
+    PINECONE_INDEX_NAME: str = "enervara-specialists"
+
+    # Namespace within PINECONE_INDEX_NAME to retrieve from.
+    #
+    # `enervara-specialists` is one index partitioned per specialty
+    # (dermatology, cardiology, ent, ophthalmology, orthopaedics,
+    # pulmonology_v1) and holds NOTHING in the default namespace. A query
+    # without a namespace therefore matches zero vectors and the service
+    # answers ungrounded with no error — so this must stay set for any
+    # deployment pointed at that index.
+    #
+    # Empty string preserves the previous behaviour (query the default
+    # namespace), which is what single-namespace indexes like `enervera` need.
+    PINECONE_NAMESPACE: str = "dermatology"
 
     # ----- Neo4j (knowledge graph) -----
     NEO4J_URI: str = "bolt://127.0.0.1:7687"
@@ -246,6 +277,7 @@ class Config:
 
     PINECONE_API_KEY = settings.PINECONE_API_KEY
     PINECONE_INDEX_NAME = settings.PINECONE_INDEX_NAME
+    PINECONE_NAMESPACE = settings.PINECONE_NAMESPACE
     NEO4J_URI = settings.NEO4J_URI
     NEO4J_USER = settings.NEO4J_USERNAME
     NEO4J_PWD = settings.NEO4J_PASSWORD

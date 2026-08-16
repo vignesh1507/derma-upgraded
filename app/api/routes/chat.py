@@ -85,7 +85,9 @@ async def chat(req: ChatRequest, request: Request, ctx: ContainerDep) -> ChatRes
         ctx=ctx, request_id=request_id, session_id=req.session_id,
         user_id=req.user_id, envelope=req.identity,
     )
-    result = await ctx.orchestrator.run(query=req.query, identity=identity)
+    result = await ctx.orchestrator.run(
+        query=req.query, identity=identity, location=req.location
+    )
     return ChatResponse(
         answer=result.answer,
         session_id=result.session_id,
@@ -151,6 +153,7 @@ async def chat_image(
         query=media_result.effective_query,
         identity=identity,
         media=media_result.attachment,
+        location=getattr(req, "location", None),
     )
     return ImageChatResponse(
         answer=result.answer,
@@ -223,7 +226,9 @@ async def chat_blocks(req: ChatRequest, request: Request, ctx: ContainerDep) -> 
         user_id=req.user_id, envelope=req.identity,
     )
     ndjson = _to_ndjson(
-        ctx.orchestrator.stream_blocks(query=req.query, identity=identity)
+        ctx.orchestrator.stream_blocks(
+            query=req.query, identity=identity, location=req.location
+        )
     )
     return StreamingResponse(
         ndjson,
@@ -255,7 +260,9 @@ async def chat_stream_blocks(req: ChatRequest, request: Request, ctx: ContainerD
         user_id=req.user_id, envelope=req.identity,
     )
     sse_blocks = _blocks_to_sse(
-        ctx.orchestrator.stream_blocks(query=req.query, identity=identity)
+        ctx.orchestrator.stream_blocks(
+            query=req.query, identity=identity, location=req.location
+        )
     )
     return StreamingResponse(
         sse_blocks,
@@ -285,7 +292,9 @@ async def chat_stream(req: ChatRequest, request: Request, ctx: ContainerDep) -> 
         user_id=req.user_id, envelope=req.identity,
     )
     sse_stream = _to_sse(
-        ctx.orchestrator.stream(query=req.query, identity=identity)
+        ctx.orchestrator.stream(
+            query=req.query, identity=identity, location=req.location
+        )
     )
     return StreamingResponse(
         sse_stream,

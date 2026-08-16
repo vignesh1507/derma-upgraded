@@ -1,6 +1,6 @@
-# Enervera Medical GraphRAG
+# Enervera Dermatology GraphRAG
 
-A clinical question-answering service that fuses dense vector search (Pinecone), a structured medical knowledge graph (Neo4j), Redis-backed short-term session memory, and a Pinecone-backed long-term episodic memory — exposed as an async **FastAPI** service that streams Gemini answers behind a multi-stage safety, routing, and retrieval pipeline.
+A dermatology question-answering service — covering skin, hair, nails and mucosa — that fuses dense vector search (Pinecone), a structured medical knowledge graph (Neo4j), Redis-backed short-term session memory, and a Pinecone-backed long-term episodic memory — exposed as an async **FastAPI** service that streams Gemini answers behind a multi-stage safety, routing, and retrieval pipeline.
 
 
 

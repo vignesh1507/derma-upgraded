@@ -52,6 +52,9 @@ class AppContainer:
     # Sink for longitudinal clinical-memory events. Default NullPMSClient (no-op)
     # so nothing is sent yet; swap for the real HTTP client when PMS is ready.
     pms: "PMSClient"
+    # UV / moisture / air-quality lookups for the patient's location. None when
+    # ENVIRONMENTAL_CONTEXT_ENABLED is off or no key is configured.
+    environmental_provider: "EnvironmentalProvider | None"
     orchestrator: "AsyncOrchestrator"
 
     async def aclose(self) -> None:
@@ -122,6 +125,23 @@ async def build_container() -> AppContainer:
     llm = GeminiLLM()
     analyzer = MedicalQueryAnalyzer()
 
+    environmental_provider = None
+    if settings.ENVIRONMENTAL_CONTEXT_ENABLED:
+        if settings.WEATHER_API:
+            from app.services.environment import EnvironmentalProvider
+            environmental_provider = EnvironmentalProvider(
+                api_key=settings.WEATHER_API,
+                timeout_s=settings.ENVIRONMENTAL_TIMEOUT_S,
+                cache_ttl_s=settings.ENVIRONMENTAL_CACHE_TTL_S,
+                default_country=settings.ENVIRONMENTAL_DEFAULT_COUNTRY,
+            )
+            logger.info("Environmental context enabled")
+        else:
+            logger.warning(
+                "ENVIRONMENTAL_CONTEXT_ENABLED is on but WEATHER_API is unset "
+                "— environmental context disabled"
+            )
+
     episodic = None
     if settings.EPISODIC_MEMORY_ENABLED:
         try:
@@ -147,6 +167,7 @@ async def build_container() -> AppContainer:
         # NullPMSClient by default (no HTTP, no behaviour change). Becomes the
         # fire-and-forget HttpPMSClient only when ENABLE_PMS_SHADOW=true.
         pms=build_pms_client(settings),
+        environmental_provider=environmental_provider,
         orchestrator=None,  # type: ignore[arg-type]  # filled below
     )
     container.orchestrator = AsyncOrchestrator(container)

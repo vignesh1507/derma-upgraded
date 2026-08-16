@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator
@@ -66,6 +67,31 @@ class AsyncOrchestrator:
         self._c = container
 
     # ------------------------------------------------------------------
+    # Environmental context (UV, moisture, air quality)
+    # ------------------------------------------------------------------
+
+    def _environmental_block(self, location: str | None) -> str:
+        """
+        Local conditions for `location`, or "" — never raises, never blocks.
+
+        Returns "" whenever the feature is off, no location is known, the
+        provider is unavailable, or the reading is not clinically noteworthy.
+        """
+        if not location:
+            return ""
+        provider = getattr(self._c, "environmental_provider", None)
+        if provider is None:
+            return ""
+        try:
+            ctx = provider.fetch(location)
+        except Exception:                       # noqa: BLE001 - fail open
+            logger.warning("Environmental lookup raised; continuing without it")
+            return ""
+        if ctx is None or not ctx.is_clinically_relevant:
+            return ""
+        return ctx.to_prompt_block()
+
+    # ------------------------------------------------------------------
     # Public — non-streaming
     # ------------------------------------------------------------------
 
@@ -75,6 +101,7 @@ class AsyncOrchestrator:
         query: str,
         identity: "IdentityContext",
         media: "MediaAttachment | None" = None,
+        location: str | None = None,
     ) -> ChatResult:
         """
         Run one full pipeline turn.
@@ -225,6 +252,10 @@ class AsyncOrchestrator:
         combined_memory = memory_payload.memory_context
         if episodic_context_str:
             combined_memory = episodic_context_str.strip() + "\n\n" + combined_memory
+        environmental_block = self._environmental_block(location)
+        followup_questions = self._drop_answered_followups(
+            followup_questions, environmental_block
+        )
 
         from app.services.demographics import render_demographic_block
 
@@ -243,6 +274,7 @@ class AsyncOrchestrator:
                 media_context=media.context_text if media else "",
                 media=media.parts if media else None,
                 demographic_context=demographic_context,
+                environmental_context=environmental_block,
             )
 
         if followup_questions and answer:
@@ -301,7 +333,8 @@ class AsyncOrchestrator:
         *,
         query: str,
         identity: "IdentityContext",
-    ) -> AsyncIterator[dict[str, Any]]:
+        location: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
         """
         Yield SSE-shaped events as the pipeline progresses.
 
@@ -429,6 +462,10 @@ class AsyncOrchestrator:
             combined_memory = memory_payload.memory_context
             if episodic_context_str:
                 combined_memory = episodic_context_str.strip() + "\n\n" + combined_memory
+            environmental_block = self._environmental_block(location)
+            followup_questions = self._drop_answered_followups(
+                followup_questions, environmental_block
+            )
 
             # Tell the client what's about to happen so a UI can show status.
             yield {
@@ -458,6 +495,7 @@ class AsyncOrchestrator:
                 query_type=intent_str,
                 risk_level=str((analysis or {}).get("risk_level") or "none"),
                 demographic_context=demographic_context,
+                environmental_context=environmental_block,
             )
 
             llm_t0 = time.monotonic()
@@ -517,7 +555,8 @@ class AsyncOrchestrator:
         *,
         query: str,
         identity: "IdentityContext",
-    ) -> "AsyncIterator[Block]":
+        location: str | None = None,
+) -> "AsyncIterator[Block]":
         """
         STAGE-4 answer as a stream of validated UI blocks.
 
@@ -641,6 +680,7 @@ class AsyncOrchestrator:
             combined_memory = memory_payload.memory_context
             if episodic_context_str:
                 combined_memory = episodic_context_str.strip() + "\n\n" + combined_memory
+            environmental_block = self._environmental_block(location)
 
             from app.services.demographics import render_demographic_block
 
@@ -661,6 +701,7 @@ class AsyncOrchestrator:
                 consolidate=consolidate,
                 response_mode=response_mode,
                 demographic_context=demographic_context,
+                environmental_context=environmental_block,
                 output_format="blocks",
             )
 
@@ -726,6 +767,7 @@ class AsyncOrchestrator:
         media_context: str = "",
         media: "list | None" = None,
         demographic_context: str = "",
+        environmental_context: str = "",
     ) -> str:
         """
         Non-streaming Gemini answer. Reuses GeminiLLM's prompt assembly but
@@ -745,6 +787,7 @@ class AsyncOrchestrator:
             risk_level=risk_level,
             media_context=media_context,
             demographic_context=demographic_context,
+            environmental_context=environmental_context,
         )
         # Vision-capable model when an image is attached; text model otherwise.
         model = (cfg.VISION_MODEL if media else cfg.ANSWER_MODEL) or DEFAULT_MODEL
@@ -824,6 +867,92 @@ class AsyncOrchestrator:
         raw = analysis.get("followup_questions") or []
         # Hard cap: ≤1 question per turn (project contract).
         return [q for q in raw[:1] if q]
+
+    @staticmethod
+    def _drop_answered_followups(
+        questions: list[str], environmental_block: str
+    ) -> list[str]:
+        """
+        Drop follow-ups asking for AMBIENT conditions we have already measured.
+
+        The analyser proposes follow-ups at stage -1, before retrieval and
+        before the environmental lookup, so it cannot know that [LOCAL
+        CONDITIONS] were attached. Left alone this produces a turn that states
+        the UV index and the humidity in the answer and then asks the patient
+        what the UV and humidity are.
+
+        THE ASYMMETRY MATTERS MORE HERE THAN ANYWHERE ELSE IN THE PLATFORM.
+        Personal sun behaviour — hours outdoors, sunscreen, covering — is the
+        highest-value history a dermatology service takes, and a UV reading
+        cannot answer any of it: UV 11 over the city says nothing about whether
+        this patient was under it. Suppressing "do you use sunscreen?" would be
+        a far worse defect than the redundancy being fixed. So the personal
+        list wins every tie, and the ambient list stays deliberately narrow —
+        only phrasings our own block genuinely answers.
+        """
+        if not environmental_block or not questions:
+            return questions
+        kept: list[str] = []
+        for q in questions:
+            personal = bool(_PERSONAL_RE.search(q))
+            ambient = bool(_AMBIENT_RE.search(q))
+            if ambient and not personal:
+                logger.info(
+                    "Dropping follow-up already answered by local conditions: %r", q
+                )
+                continue
+            kept.append(q)
+        return kept
+
+
+# Ambient conditions the environmental provider already measures. Kept NARROW
+# on purpose: a question only qualifies if our own block genuinely answers it.
+# Bare "sun" is absent by design — "how much sun do you get?" is behaviour, not
+# a reading.
+_AMBIENT_TERMS: tuple[str, ...] = (
+    "uv index", "uv level", "uv radiation",
+    "air quality", "air pollution", "pollution", "aqi", "pm2.5", "pm10",
+    "particulate", "smog", "haze",
+    "humid", "dew point", "weather", "climate", "season",
+    "environmental factor", "environmental condition", "surroundings",
+)
+
+# Personal exposures and behaviours we do NOT know and must keep asking about.
+# Any question touching one of these survives even if it also names an ambient
+# term — "on high-UV days do you wear sunscreen?" is a behaviour question.
+_PERSONAL_EXPOSURE_TERMS: tuple[str, ...] = (
+    # sun behaviour — the highest-value dermatology history there is
+    "sun exposure", "in the sun", "sunlight", "sunscreen", "spf", "sunblock",
+    "outdoors", "outside", "shade", "hat", "cover", "clothing",
+    "how long are you", "time do you spend", "midday",
+    # topicals, irritants and contactants
+    "product", "cosmetic", "cream", "moistur", "soap", "detergent", "shampoo",
+    "fragrance", "perfume", "dye", "nickel", "jewellery", "jewelry", "glove",
+    "chemical", "chlorine", "swim", "shower", "bath", "hot water",
+    # occupational and domestic
+    "work", "job", "occupation", "factory", "field",
+    "home", "house", "indoor", "heater", "air conditioning",
+    # systemic and other
+    "medication", "drug", "tablet", "travel", "contact", "family", "history",
+    "allerg",
+)
+
+
+def _term_matcher(terms: tuple[str, ...]) -> "re.Pattern[str]":
+    """
+    Word-START anchored matcher.
+
+    Substring matching is wrong here and was caught in test: "hat" matches
+    inside "W-hat", so every question opening "What is the..." looked like a
+    question about sun-protective clothing. Anchoring the LEFT edge only keeps
+    stems working — "humid" still matches "humidity", "allerg" matches
+    "allergies" — while "\bhat" no longer fires inside "what".
+    """
+    return re.compile("|".join(r"\b" + re.escape(t) for t in terms), re.I)
+
+
+_AMBIENT_RE = _term_matcher(_AMBIENT_TERMS)
+_PERSONAL_RE = _term_matcher(_PERSONAL_EXPOSURE_TERMS)
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +1075,7 @@ def _compose_answer_prompts(
     response_mode: str = "generative_answer",
     media_context: str = "",
     demographic_context: str = "",
+    environmental_context: str = "",
 ) -> tuple[str, str]:
     """
     Compose the (system, user) prompt pair for the answer LLM.
@@ -977,10 +1107,18 @@ def _compose_answer_prompts(
     # Authoritative current patient facts (from MongoDB) — kept SEPARATE from
     # session/episodic memory and only present when relevant to this query.
     demo_block = f"\n{demographic_context}\n" if demographic_context else ""
+    # Measured local conditions get their OWN section rather than being folded
+    # into clinical memory. Buried in memory the model treats them as "things
+    # the patient told me" and generalises instead of citing the readings.
+    env_block = (
+        f"\n=== LOCAL ENVIRONMENT (measured, not patient-reported) ===\n"
+        f"{environmental_context}\n"
+        if environmental_context else ""
+    )
 
     user_prompt = f"""
 USER QUESTION: {query}
-{media_block}{demo_block}
+{media_block}{demo_block}{env_block}
 === STRUCTURED CLINICAL MEMORY ===
 {memory_context}
 
