@@ -1,23 +1,17 @@
 name: Deploy to ECS
 
 on:
-  # Automatic deploy-on-push is DISABLED deliberately. Publishing the
-  # dermatology re-skin must not fire an ECS deployment as a side effect of
-  # pushing code. Deploy stays available on demand via the Actions tab
-  # (Run workflow), so nothing is lost — it just requires an explicit
-  # decision instead of happening implicitly.
-  # To restore automatic deploys, uncomment the push trigger below.
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 env:
   AWS_REGION: ap-south-1
-  ECR_REPOSITORY: enervara-api
+  ECR_REPOSITORY: derma-api
   ECS_CLUSTER: enervara-mumbai-cluster
-  ECS_SERVICE: enervara-api-service
-  ECS_TASK_FAMILY: enervara-api
-  CONTAINER_NAME: enervara-api
+  ECS_SERVICE: derma-api-service
+  ECS_TASK_FAMILY: derma-api
+  CONTAINER_NAME: derma-api
 
 permissions:
   contents: read
@@ -55,7 +49,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::341208406542:role/enervera-api-github-actions
+          role-to-assume: arn:aws:iam::341208406542:role/derma-api-github-actions
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -105,4 +99,4 @@ jobs:
           aws ecs wait services-stable --cluster $ECS_CLUSTER --services $ECS_SERVICE
 
       - name: Smoke test
-        run: curl -fsS https://api.enervara.com/health
+        run: curl -fsS https://derma-api.enervara.com/health
