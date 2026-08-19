@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class IdentityEnvelope(BaseModel):
@@ -24,7 +24,11 @@ class IdentityEnvelope(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=4000)
+    query: str = Field(
+        min_length=1,
+        max_length=4000,
+        validation_alias=AliasChoices("query", "message"),
+    )
     session_id: str = Field(default_factory=lambda: uuid4().hex)
     # When provided, the orchestrator loads the user's episodic memory before
     # the LLM call and ingests the turn after the answer. When omitted, the
