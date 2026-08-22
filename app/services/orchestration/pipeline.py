@@ -131,7 +131,7 @@ class AsyncOrchestrator:
         analyzer_input = memory_query_text if (wm.turn_count or wm.has_summary) else query
 
         # Stage -1: Gatekeeper analyzer
-        trivial_skip = is_trivial_input(query) and wm.turn_count > 0
+        trivial_skip = is_trivial_input(query)
         if trivial_skip:
             analysis: dict[str, Any] = {}
         else:
@@ -187,18 +187,63 @@ class AsyncOrchestrator:
         intent_str = (analysis or {}).get("intent") or "unknown"
         vector_top_k, reranker_top_k, graph_hops = _route_budget(routing_mode, cfg)
 
-        # Stage 1: Pinecone (sync client → thread)
+        # Stages 1, 3.5 and demographics run CONCURRENTLY. They are mutually
+        # independent: none consumes another's output. Sequentially they cost
+        # the sum of their latencies; together they cost the slowest. Only the
+        # graph step below has a real dependency, needing the entities
+        # extracted from the vector matches.
         retrieval_query_text = build_retrieval_query(active_query, wm)
-        if vector_top_k > 0:
-            with _Stage("vector_retrieve", timing):
-                matches = await asyncio.to_thread(
+
+        async def _fetch_vector():
+            if vector_top_k <= 0:
+                return []
+            t0 = time.monotonic()
+            try:
+                return await asyncio.to_thread(
                     self._c.vector_retriever.retrieve,
                     retrieval_query_text,
                     vector_top_k,
                     reranker_top_k,
                 )
-        else:
-            matches = []
+            finally:
+                timing["vector_retrieve"] = int((time.monotonic() - t0) * 1000)
+
+        async def _fetch_episodic():
+            # Nothing to recall for a greeting, and the lookup costs ~1.5s.
+            if trivial_skip or not user_id or self._c.episodic is None:
+                return ""
+            t0 = time.monotonic()
+            try:
+                return await self._load_episodic_context(
+                    user_id=user_id, query_text=retrieval_query_text
+                )
+            finally:
+                timing["episodic_context"] = int((time.monotonic() - t0) * 1000)
+
+        async def _fetch_environmental():
+            # Previously called inline and NOT instrumented, which is why time
+            # went missing from the timing dict. Skipped for greetings: local
+            # weather has no bearing on "hello".
+            if trivial_skip:
+                return ""
+            t0 = time.monotonic()
+            try:
+                return await asyncio.to_thread(self._environmental_block, location)
+            finally:
+                timing["environmental"] = int((time.monotonic() - t0) * 1000)
+
+        with _Stage("retrieval_parallel", timing):
+            (
+                matches,
+                episodic_context_str,
+                demo,
+                environmental_block,
+            ) = await asyncio.gather(
+                _fetch_vector(),
+                _fetch_episodic(),
+                self._load_demographics(user_id),
+                _fetch_environmental(),
+            )
 
         # Stage 2: Entity extraction (pure)
         from graphrag.processors.entity_processor import EntityProcessor  # local: keep import light
@@ -225,18 +270,9 @@ class AsyncOrchestrator:
         else:
             graph_context_str = ""
 
-        # Stage 3.5: Episodic memory context (async-native)
-        episodic_context_str = ""
-        if user_id and self._c.episodic is not None:
-            with _Stage("episodic_context", timing):
-                episodic_context_str = await self._load_episodic_context(
-                    user_id=user_id, query_text=retrieval_query_text
-                )
-
         # Authoritative demographics (MongoDB) — loaded ONCE. The object drives
         # both the injected block and suppression of conflicting conversational
         # age/sex in the session-state block (Mongo is the source of truth).
-        demo = await self._load_demographics(user_id)
         authoritative = _authoritative_demographic_fields(demo)
 
         # Stage 4: LLM answer
@@ -252,7 +288,6 @@ class AsyncOrchestrator:
         combined_memory = memory_payload.memory_context
         if episodic_context_str:
             combined_memory = episodic_context_str.strip() + "\n\n" + combined_memory
-        environmental_block = self._environmental_block(location)
         followup_questions = self._drop_answered_followups(
             followup_questions, environmental_block
         )
@@ -370,7 +405,7 @@ class AsyncOrchestrator:
             memory_query_text = build_retrieval_query(query, wm)
             analyzer_input = memory_query_text if (wm.turn_count or wm.has_summary) else query
 
-            trivial_skip = is_trivial_input(query) and wm.turn_count > 0
+            trivial_skip = is_trivial_input(query)
             if trivial_skip:
                 analysis: dict[str, Any] = {}
             else:
@@ -586,7 +621,7 @@ class AsyncOrchestrator:
             memory_query_text = build_retrieval_query(query, wm)
             analyzer_input = memory_query_text if (wm.turn_count or wm.has_summary) else query
 
-            trivial_skip = is_trivial_input(query) and wm.turn_count > 0
+            trivial_skip = is_trivial_input(query)
             if trivial_skip:
                 analysis: dict[str, Any] = {}
             else:
