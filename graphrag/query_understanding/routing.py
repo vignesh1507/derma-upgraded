@@ -93,7 +93,12 @@ def decide_routing(
     Pure function: no I/O, no logging side effects. Caller logs the decision.
     """
     # 1) Trivial acknowledgment in an established session → no retrieval, no LLM gatekeeper.
-    if is_trivial_input(raw_query) and wm.turn_count > 0:
+    # Was `and wm.turn_count > 0`, so the FIRST message of a session paid
+    # full price: a gatekeeper LLM call plus episodic retrieval to answer
+    # "hello", ~4.6s. TRIVIAL_INPUT holds only greetings now (yes/no were
+    # removed because they answer closed clinical questions), and none of
+    # those carry clinical content on turn 0 any more than on turn 5.
+    if is_trivial_input(raw_query):
         return RoutingMode.NO_RETRIEVAL, QueryType.UNKNOWN
 
     # 2) Gatekeeper said this is conversational continuation.

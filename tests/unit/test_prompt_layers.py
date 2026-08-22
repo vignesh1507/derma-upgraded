@@ -497,6 +497,13 @@ def test_output_contract_is_ndjson_and_lists_all_block_types():
 
 def test_compose_joins_all_layers_for_substantive_with_name_critical():
     # Default (prose) mode — the untouched /chat path.
+    # Raised 8400 -> 8450 for the HOW TO SOUND LIKE A PERSON block. That is a
+    # NEW layer, not growth in an existing one: the service was opening replies
+    # with a stock empathy formula and parroting the complaint straight back,
+    # which is the loudest machine tell in the product. Paid for partly by
+    # rewriting the consultation-flow layer in plainer register, which also
+    # removed every em dash from the prompt. The model mirrors the register of
+    # its instructions, so dense em-dash prose was teaching dense em-dash prose.
     out = compose_system_prompt(
         query_type="symptom_query",
         risk_level="critical",
@@ -608,7 +615,7 @@ def test_compose_typical_path_fits_token_budget():
         has_name=False,
     )
     chars = len(out)
-    assert chars <= 8400, (
+    assert chars <= 8450, (
         f"Composed prompt is {chars} chars (~{chars // 4} tokens); "
         f"tighten layer text or re-evaluate budget."
     )
